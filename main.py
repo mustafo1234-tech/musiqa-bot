@@ -20,12 +20,14 @@ import re
 import shutil
 import sys
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import asyncpg
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -1193,6 +1195,25 @@ async def handle_pick(
 # ---------------------------------------------------------------------------
 
 
+async def start_health_server() -> None:
+    """Render kabi platformalar uchun $PORT da oddiy HTTP health server ochadi."""
+
+    port = int(os.getenv("PORT", "8080"))
+
+    async def health(_: web.Request) -> web.Response:
+        return web.Response(text="OK")
+
+    app = web.Application()
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info("Health server %s-portda ishga tushdi.", port)
+
+
 async def main() -> None:
     """Botni ishga tushiradi."""
 
@@ -1233,6 +1254,8 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
+    health_task = asyncio.create_task(start_health_server())
+
     try:
         me = await bot.get_me()
         bot_name = me.first_name or me.username or "Musiqa Bot"
@@ -1257,6 +1280,9 @@ async def main() -> None:
     except Exception:
         logger.exception("Bot ishga tushishida yoki ishlashida xatolik.")
     finally:
+        health_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await health_task
         await database.close()
         await bot.session.close()
         logger.info("Bot to'xtatildi.")
